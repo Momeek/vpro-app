@@ -3,7 +3,7 @@ name: VProfile CI/CD
 on:
   pull_request:
     branches:
-      - feature-Y
+      - main
   push:
     branches:
       - main
