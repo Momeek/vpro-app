@@ -103,9 +103,11 @@ jobs:
           severity: CRITICAL,HIGH
 
       - name: Push image tags
+        id: push
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ needs.build.outputs.commit_sha }}
+          IMAGE_TAG: ${{ github.sha }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
         run: |
           docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
           docker push "$REGISTRY/$ECR_REPOSITORY:latest"
@@ -137,7 +139,7 @@ jobs:
         working-directory: helm-repo
         env:
           REGISTRY: ${{ needs.docker-build-push.outputs.registry }}
-          IMAGE_TAG: ${{ needs.docker-build-push.outputs.image_tag }}
+          IMAGE_TAG: ${{ github.sha }}
           ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
         run: |
           yq -i '.app.image = strenv(REGISTRY) + "/" + strenv(ECR_REPOSITORY) | .app.tag = strenv(IMAGE_TAG)' helm/vprofile/values.yaml
