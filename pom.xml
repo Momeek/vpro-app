@@ -92,7 +92,7 @@
         <dependency>
 	    <groupId>org.mockito</groupId>
     	    <artifactId>mockito-core</artifactId>
-            <version>1.9.5</version>
+            <version>4.11.0</version>
             <scope>test</scope>
 	</dependency>
 	<dependency>
@@ -178,6 +178,11 @@
                     </webApp>
                 </configuration>
             </plugin>
+        <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+        </plugin>
 		<!-- CODE COVERAGE -->
  		    <plugin>
  		        <groupId>org.jacoco</groupId>
