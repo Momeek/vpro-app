@@ -85,7 +85,7 @@ jobs:
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
-          ECR_RESPOSITORY: ${{vars.ECR_REPOSITORY}}
+          ECR_REPOSITORY: ${{vars.ECR_REPOSITORY}}
         run: |
           docker build \
             --file Docker-files/app/multistage/Dockerfile \
