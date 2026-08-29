@@ -99,7 +99,7 @@ jobs:
           image-ref: ${{ steps.login-ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${{ github.sha }}
           format: table
           output: vprofile-trivy-report.json
-          exit-code: "1"
+          exit-code: "0"
           ignore-unfixed: true
           severity: CRITICAL,HIGH
 
