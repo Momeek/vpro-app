@@ -1,0 +1,182 @@
+name: VProfile CI/CD
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: read
+
+jobs:
+  build:
+    name: Build, test, Checkstyle, and SonarQube
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      commit_sha: ${{ steps.metadata.outputs.commit_sha }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21 and cache Maven dependencies
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Cache SonarQube dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar-${{ hashFiles('sonar-project.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-sonar-
+
+      - name: Test, and generate Checkstyle report
+        run: mvn -B -U clean verify checkstyle:checkstyle
+
+      - name: Run SonarQube scan
+        uses: sonarsource/sonarqube-scan-action@v2
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+
+      - name: Check SonarQube quality gate
+        uses: sonarsource/sonarqube-quality-gate-action@v1.1.0
+        timeout-minutes: 10
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+
+      - name: Export commit SHA
+        id: metadata
+        run: echo "commit_sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+  docker-build-push:
+    name: Build and push Docker image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      registry: ${{ steps.login-ecr.outputs.registry }}
+      image_tag: ${{ steps.image.outputs.image_tag }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ secrets.CI_AWS_ROLE_ARN || vars.CI_AWS_ROLE_ARN }}
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        id: image
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ needs.build.outputs.commit_sha }}
+        run: |
+          docker build \
+            --file Docker-files/app/multistage/Dockerfile \
+            --tag "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
+            --tag "$REGISTRY/$ECR_REPOSITORY:latest" \
+            .
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.login-ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${{ needs.build.outputs.commit_sha }}
+          format: table
+          output: vprofile-trivy-report.json
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+
+      - name: Push image tags
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ needs.build.outputs.commit_sha }}
+        run: |
+          docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker push "$REGISTRY/$ECR_REPOSITORY:latest"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Trivy scan report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vprofile-trivy-report-${{ needs.build.outputs.commit_sha }}
+          path: trivy-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  update-helm:
+    name: Update Helm GitOps repository
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: docker-build-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Helm repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/${{ vars.HELM_REPO_NAME }}
+          token: ${{ secrets.GITOPS_PAT }}
+          path: helm-repo
+
+      - name: Update image and tag with yq
+        working-directory: helm-repo
+        env:
+          REGISTRY: ${{ needs.docker-build-push.outputs.registry }}
+          IMAGE_TAG: ${{ needs.docker-build-push.outputs.image_tag }}
+          ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
+        run: |
+          yq -i '.app.image = strenv(REGISTRY) + "/" + strenv(ECR_REPOSITORY) | .app.tag = strenv(IMAGE_TAG)' helm/vprofile/values.yaml
+
+      - name: Commit and push Helm change
+        working-directory: helm-repo
+        env:
+          IMAGE_TAG: ${{ needs.docker-build-push.outputs.image_tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add helm/vprofile/values.yaml
+          git diff --cached --quiet || git commit -m "Update vproapp image to ${IMAGE_TAG}"
+          git push
+
+  notify:
+    name: Notify Slack
+    if: always()
+    needs: [build, docker-build-push, update-helm]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send pipeline notification
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          DOCKER_RESULT: ${{ needs.docker-build-push.result }}
+          HELM_RESULT: ${{ needs.update-helm.result }}
+        run: |
+          if [[ -z "$SLACK_WEBHOOK" ]]; then
+            echo "SLACK_WEBHOOK is not configured; skipping notification"
+            exit 0
+          fi
+          status=success
+          if [[ "$BUILD_RESULT" == "failure" || "$DOCKER_RESULT" == "failure" || "$HELM_RESULT" == "failure" ]]; then
+            status=failure
+          fi
+          message="VProfile pipeline ${status}: ${GITHUB_EVENT_NAME} on ${GITHUB_REF_NAME} (${GITHUB_SHA})"
+          curl --fail --silent --show-error -X POST \
+            -H 'Content-Type: application/json' \
+            --data "$(jq -n --arg text "$message" '{text: $text}')" \
+            "$SLACK_WEBHOOK"
