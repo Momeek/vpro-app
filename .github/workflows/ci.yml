@@ -38,8 +38,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-sonar-
 
-      - name: Build, test, and generate Checkstyle report
-        run: mvn --batch-mode clean verify org.apache.maven.plugins:maven-checkstyle-plugin:3.6.0:checkstyle
+      - name: Test, and generate Checkstyle report
+        run: mvn -B -U clean verify checkstyle:checkstyle
 
       - name: Run SonarQube scan
         uses: sonarsource/sonarqube-scan-action@v2
