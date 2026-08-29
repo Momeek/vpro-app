@@ -16,6 +16,7 @@ permissions:
 jobs:
   build:
     name: Build, test, Checkstyle, and SonarQube
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       commit_sha: ${{ steps.metadata.outputs.commit_sha }}
