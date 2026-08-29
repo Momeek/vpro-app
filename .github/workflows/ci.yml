@@ -84,8 +84,7 @@ jobs:
         id: image
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
-          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ needs.build.outputs.commit_sha }}
         run: |
           docker build \
             --file Docker-files/app/multistage/Dockerfile \
@@ -104,11 +103,9 @@ jobs:
           severity: CRITICAL,HIGH
 
       - name: Push image tags
-        id: push
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
-          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ needs.build.outputs.commit_sha }}
         run: |
           docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
           docker push "$REGISTRY/$ECR_REPOSITORY:latest"
