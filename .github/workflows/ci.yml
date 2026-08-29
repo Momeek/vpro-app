@@ -62,7 +62,6 @@ jobs:
   docker-build-push:
     name: Build and push Docker image
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: build
     runs-on: ubuntu-latest
     outputs:
       registry: ${{ steps.login-ecr.outputs.registry }}
