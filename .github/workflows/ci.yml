@@ -84,7 +84,7 @@ jobs:
         id: image
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ needs.build.outputs.commit_sha }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
           docker build \
             --file Docker-files/app/multistage/Dockerfile \
@@ -95,7 +95,7 @@ jobs:
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@0.35.0
         with:
-          image-ref: ${{ steps.login-ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${{ needs.build.outputs.commit_sha }}
+          image-ref: ${{ steps.login-ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${{ github.sha }}
           format: table
           output: vprofile-trivy-report.json
           exit-code: "1"
@@ -105,7 +105,7 @@ jobs:
       - name: Push image tags
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ needs.build.outputs.commit_sha }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
           docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
           docker push "$REGISTRY/$ECR_REPOSITORY:latest"
@@ -115,7 +115,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: vprofile-trivy-report-${{ needs.build.outputs.commit_sha }}
+          name: vprofile-trivy-report-${{ github.sha }}
           path: trivy-report.json
           if-no-files-found: warn
           retention-days: 14
