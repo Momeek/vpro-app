@@ -140,7 +140,7 @@ jobs:
         env:
           REGISTRY: ${{ needs.docker-build-push.outputs.registry }}
           IMAGE_TAG: ${{ needs.docker-build-push.outputs.image_tag }}
-          ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
         run: |
           yq -i '.app.image = strenv(REGISTRY) + "/" + strenv(ECR_REPOSITORY) | .app.tag = strenv(IMAGE_TAG)' helm/vprofile/values.yaml
 
