@@ -124,17 +124,29 @@ jobs:
           retention-days: 14
 
   update-helm:
-    name: Update Helm GitOps repository
+    name: Prepare Helm approval PR
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: docker-build-push
     runs-on: ubuntu-latest
+    env:
+      HELM_REPO: ${{ github.repository_owner }}/${{ vars.HELM_REPO_NAME }}
+      HELM_BRANCH: helm-approval
+      PR_TITLE: "Update vproapp image to ${{ needs.docker-build-push.outputs.image_tag }}"
     steps:
-      - name: Check out Helm repository
+      - name: Check out Helm repository on main
         uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/${{ vars.HELM_REPO_NAME }}
           token: ${{ secrets.GITOPS_PAT }}
           path: helm-repo
+          ref: main
+
+      - name: Create or update approval branch
+        working-directory: helm-repo
+        run: |
+          git fetch origin main
+          git checkout -B "${HELM_BRANCH}" origin/main
+          git push --set-upstream origin "${HELM_BRANCH}" || true
 
       - name: Update image and tag with yq
         working-directory: helm-repo
@@ -144,8 +156,9 @@ jobs:
           ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
         run: |
           yq -i '.app.image = strenv(REGISTRY) + "/" + strenv(ECR_REPOSITORY) | .app.tag = strenv(IMAGE_TAG)' helm/vprofile/values.yaml
+          git diff -- helm/vprofile/values.yaml
 
-      - name: Commit and push Helm change
+      - name: Commit and push Helm change to feature branch
         working-directory: helm-repo
         env:
           IMAGE_TAG: ${{ needs.docker-build-push.outputs.image_tag }}
@@ -153,8 +166,46 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add helm/vprofile/values.yaml
-          git diff --cached --quiet || git commit -m "Update vproapp image to ${IMAGE_TAG}"
-          git push
+          if git diff --cached --quiet; then
+            echo "No Helm value changes detected; skipping commit."
+            exit 0
+          fi
+          git commit -m "Update vproapp image to ${IMAGE_TAG}"
+          git push origin "${HELM_BRANCH}"
+
+      - name: update pull request to main
+        working-directory: helm-repo
+        env:
+          GH_TOKEN: ${{ secrets.GITOPS_PAT }}
+        run: |
+          if gh pr list --repo "${HELM_REPO}" --head "${HELM_BRANCH}" --base main --state open --json number --jq '.[0].number' | grep -q '[0-9]'; then
+            echo "Helm approval PR already exists for ${HELM_BRANCH}."
+          else
+            gh pr create --repo "${HELM_REPO}" \
+              --base main \
+              --head "${HELM_BRANCH}" \
+              --title "${PR_TITLE}" \
+              --body "This PR updates the Helm values.yaml after the application pipeline builds and pushes the image. Review and merge to apply the change to main."
+          fi
+
+      - name: Slack notification for Helm approval PR
+        if: always()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        run: |
+          if [[ -z "$SLACK_WEBHOOK" ]]; then
+            echo "SLACK_WEBHOOK is not configured; skipping notification"
+            exit 0
+          fi
+          status=success
+          if [[ "${{ job.status }}" != "success" ]]; then
+            status=failure
+          fi
+          message="Helm approval update ${status}: PR created/updated for ${HELM_REPO} branch ${HELM_BRANCH} with image ${GITHUB_SHA}"
+          curl --fail --silent --show-error -X POST \
+            -H 'Content-Type: application/json' \
+            --data "$(jq -n --arg text "$message" '{text: $text}')" \
+            "$SLACK_WEBHOOK"
 
   notify:
     name: Notify Slack
